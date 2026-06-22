@@ -2,8 +2,8 @@ const donationForm = document.querySelector('#donationForm');
 const toast = document.querySelector('#toast');
 const toastMessage = document.querySelector('#toastMessage');
 
-let paymentReference = null;
-let checkInterval = null;
+let currentReference = null;
+let interval = null;
 
 function showToast(title, message, isError = false) {
   toastMessage.innerHTML = `<strong>${title}</strong><span>${message}</span>`;
@@ -12,105 +12,79 @@ function showToast(title, message, isError = false) {
     : 'rgba(73, 198, 255, 0.3)';
 
   toast.classList.add('show');
-  window.clearTimeout(window.toastTimeout);
 
-  window.toastTimeout = window.setTimeout(() => {
+  window.setTimeout(() => {
     toast.classList.remove('show');
-  }, 4200);
+  }, 4000);
 }
 
-// CHECK PAYMENT STATUS (IMPORTANT PART)
-async function checkPaymentStatus(reference) {
+// CHECK STATUS
+async function checkStatus(ref) {
   try {
-    const res = await fetch(`/api/status/${reference}`);
+    const res = await fetch(`/api/status/${ref}`);
     const data = await res.json();
 
     console.log("STATUS:", data);
 
     if (data.status === "success") {
-      clearInterval(checkInterval);
+      clearInterval(interval);
       window.location.href = "success.html";
     }
 
     if (data.status === "failed") {
-      clearInterval(checkInterval);
-      showToast("Payment failed", "Please try again", true);
+      clearInterval(interval);
+      showToast("Payment failed", "Try again", true);
     }
 
   } catch (err) {
-    console.error("Status check error:", err);
+    console.error(err);
   }
 }
 
 if (donationForm) {
-  donationForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
+  donationForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
 
-    const phone = document.querySelector('#phone').value.trim();
-    const amount = document.querySelector('#amount').value.trim();
-    const reference = document.querySelector('#reference').value.trim();
-    const submitButton = document.querySelector('#submitBtn');
+    const phone = document.querySelector('#phone').value;
+    const amount = document.querySelector('#amount').value;
+    const reference = document.querySelector('#reference').value;
+    const button = document.querySelector('#submitBtn');
 
     if (!phone || !amount || !reference) {
-      showToast(
-        'Missing information',
-        'Please complete all fields.',
-        true
-      );
+      showToast("Error", "Fill all fields", true);
       return;
     }
 
-    submitButton.disabled = true;
-    submitButton.textContent = 'Sending prompt...';
+    button.disabled = true;
+    button.textContent = "Sending...";
 
     try {
-      const response = await fetch('/api/pay', {
+      const res = await fetch('/api/pay', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, amount, reference })
       });
 
-      const result = await response.json();
+      const result = await res.json();
 
-      if (!response.ok) {
-        throw new Error(result.error || 'Payment failed');
+      if (!res.ok) {
+        throw new Error(result.error);
       }
 
-      // SAVE REFERENCE (VERY IMPORTANT)
-      paymentReference = reference;
+      currentReference = reference;
 
-      showToast(
-        'Payment initiated',
-        'Check your phone to complete M-Pesa payment',
-        false
-      );
+      showToast("Success", "Check your phone for STK prompt");
 
-      donationForm.reset();
-
-      // START POLLING PAYMENT STATUS
-      checkInterval = setInterval(() => {
-        checkPaymentStatus(paymentReference);
+      // start polling
+      interval = setInterval(() => {
+        checkStatus(currentReference);
       }, 3000);
 
-      // STOP AFTER 2 MINUTES
-      setTimeout(() => {
-        clearInterval(checkInterval);
-      }, 120000);
-
-    } catch (error) {
-      console.error(error);
-      showToast('Error', error.message, true);
+    } catch (err) {
+      showToast("Error", err.message, true);
     } finally {
-      submitButton.disabled = false;
-      submitButton.textContent = 'Donate with M-Pesa';
+      button.disabled = false;
+      button.textContent = "Donate with M-Pesa";
     }
   });
 }
-
-// ACTIVE LINK HIGHLIGHT
-const links = document.querySelectorAll('.nav-links a');
-links.forEach((link) => {
-  if (link.href === window.location.href) {
-    link.classList.add('active');
-  }
-});

@@ -12,29 +12,22 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
+// =====================
+// SIMPLE MEMORY STORE
+// =====================
 const payments = {};
 
+// =====================
+// LIPANA SETUP
+// =====================
 const lipana = new Lipana({
   apiKey: process.env.LIPANA_API_KEY,
   environment: process.env.LIPANA_ENV || "sandbox"
 });
 
-// ======================
-// NORMALIZE FUNCTION
-// ======================
-function getReference(body) {
-  return (
-    body.reference ||
-    body.accountReference ||
-    body.data?.reference ||
-    body.data?.transaction_id ||
-    body.data?.payoutId
-  );
-}
-
-// ======================
-// PAY
-// ======================
+// =====================
+// STEP 1: INITIATE PAYMENT
+// =====================
 app.post('/api/pay', async (req, res) => {
   const { phone, amount, reference } = req.body;
 
@@ -54,14 +47,18 @@ app.post('/api/pay', async (req, res) => {
       transactionDesc: "Donation"
     });
 
-    // store using BOTH references for safety
-    payments[reference] = { status: "pending" };
+    // IMPORTANT: store using frontend reference
+    payments[reference] = {
+      status: "pending",
+      txId: transaction.transactionId || null
+    };
 
-    if (transaction?.transactionId) {
-      payments[transaction.transactionId] = { status: "pending" };
-    }
+    console.log("PAYMENT INITIATED:", payments[reference]);
 
-    return res.json({ success: true, transaction });
+    return res.json({
+      success: true,
+      reference
+    });
 
   } catch (err) {
     console.error("PAY ERROR:", err);
@@ -69,77 +66,65 @@ app.post('/api/pay', async (req, res) => {
   }
 });
 
-// ======================
-// STATUS
-// ======================
+// =====================
+// STEP 2: STATUS CHECK
+// =====================
 app.get('/api/status/:reference', (req, res) => {
   const ref = req.params.reference;
 
-  const record = payments[ref];
+  const payment = payments[ref];
 
-  if (!record) {
+  if (!payment) {
     return res.json({ status: "pending" });
   }
 
-  return res.json({ status: record.status });
+  return res.json({
+    status: payment.status
+  });
 });
 
-// ======================
-// WEBHOOK (FINAL FIX)
-// ======================
+// =====================
+// STEP 3: WEBHOOK (CRITICAL FIX)
+// =====================
 app.post('/api/webhook', (req, res) => {
-  console.log("========== WEBHOOK RECEIVED ==========");
+  console.log("========== WEBHOOK ==========");
   console.log(JSON.stringify(req.body, null, 2));
 
   const event = req.body.event;
-  const reference = getReference(req.body);
+  const data = req.body.data || {};
 
-  if (!reference) {
-    return res.status(200).json({ received: true });
-  }
+  const reference = data.reference;
+  const txId = data.transaction_id || data.transactionId;
 
+  // SUCCESS
   if (event === "transaction.success") {
     console.log("✅ PAYMENT SUCCESS");
 
-    payments[reference] = { status: "success" };
+    if (reference && payments[reference]) {
+      payments[reference].status = "success";
+    }
   }
 
-  if (event === "transaction.failed") {
+  // FAILED / CANCELLED
+  if (event === "transaction.failed" || event === "transaction.cancelled") {
     console.log("❌ PAYMENT FAILED");
 
-    payments[reference] = { status: "failed" };
+    if (reference && payments[reference]) {
+      payments[reference].status = "failed";
+    }
   }
 
   res.status(200).json({ received: true });
 });
 
-// ======================
+// =====================
 app.get('/health', (req, res) => {
   res.json({ status: "ok" });
 });
 
-// ======================
+// =====================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
-let currentReference = null;
-
-async function checkPayment(reference) {
-  try {
-    const res = await fetch(`/api/status/${reference}`);
-    const data = await res.json();
-
-    if (data.status === "success") {
-      window.location.href = "success.html";
-    }
-
-    if (data.status === "failed") {
-      showToast("Payment failed", "Try again or use a different number", true);
-    }
-
-  } catch (err) {
-    console.error("Status check error", err);
-  }
-}
