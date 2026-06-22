@@ -1,97 +1,42 @@
-const pool = require('./db');
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { Lipana } = require('@lipana/sdk');
-const {
-  initPaymentStore,
-  savePayment,
-  getPaymentByReference,
-  updatePaymentStatus
-} = require('./paymentStore');
+const pool = require('./db');
 
 dotenv.config();
 
 const app = express();
 
+// =====================
+// MIDDLEWARE
+// =====================
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname)));
 
-function pickFirst(...values) {
-  return values.find((value) => value !== undefined && value !== null && value !== "");
-}
-
+// =====================
+// HELPERS
+// =====================
 function normalizeStatus(status) {
-  if (!status) return null;
+  if (!status) return "pending";
 
-  const normalized = String(status).toLowerCase();
+  const s = String(status).toLowerCase();
 
-  if (["success", "successful", "completed", "complete", "paid"].includes(normalized)) {
-    return "success";
-  }
-
-  if (["failed", "cancelled", "canceled", "timeout", "timed_out", "expired"].includes(normalized)) {
-    return "failed";
-  }
+  if (["success", "successful", "completed", "paid"].includes(s)) return "success";
+  if (["failed", "cancelled", "canceled", "timeout"].includes(s)) return "failed";
 
   return "pending";
 }
 
-function extractPaymentDetails(body = {}) {
-  const data = body.data || body.payload || body.transaction || body.payment || {};
-  const result = data.result || data.callback || {};
-
-  return {
-    event: body.event || body.type || body.eventType,
-    reference: pickFirst(
-      data.reference,
-      data.accountReference,
-      data.account_reference,
-      result.reference,
-      result.accountReference,
-      result.account_reference,
-      body.reference,
-      body.accountReference,
-      body.account_reference
-    ),
-    txId: pickFirst(
-      data.transaction_id,
-      data.transactionId,
-      data.transactionID,
-      data.id,
-      result.transaction_id,
-      result.transactionId,
-      result.transactionID,
-      body.transaction_id,
-      body.transactionId,
-      body.transactionID,
-      body.id
-    ),
-    checkoutRequestID: pickFirst(
-      data.checkoutRequestID,
-      data.checkout_request_id,
-      result.checkoutRequestID,
-      result.checkout_request_id,
-      body.checkoutRequestID,
-      body.checkout_request_id
-    ),
-    mpesaReceiptNumber: pickFirst(
-      data.mpesaReceiptNumber,
-      data.mpesa_receipt_number,
-      result.mpesaReceiptNumber,
-      result.mpesa_receipt_number,
-      body.mpesaReceiptNumber,
-      body.mpesa_receipt_number
-    ),
-    status: normalizeStatus(pickFirst(data.status, result.status, body.status))
-  };
+function pickFirst(...vals) {
+  return vals.find(v => v !== undefined && v !== null && v !== "");
 }
 
 // =====================
-// LIPANA SETUP
+// LIPANA INIT
 // =====================
 const lipana = new Lipana({
   apiKey: process.env.LIPANA_API_KEY,
@@ -99,7 +44,7 @@ const lipana = new Lipana({
 });
 
 // =====================
-// STEP 1: INITIATE PAYMENT
+// INITIATE PAYMENT
 // =====================
 app.post('/api/pay', async (req, res) => {
   const { phone, amount, reference } = req.body;
@@ -120,22 +65,24 @@ app.post('/api/pay', async (req, res) => {
       transactionDesc: "Donation"
     });
 
-    const payment = await savePayment({
-      reference,
-      phone,
-      amount: Number(amount),
-      status: "pending",
-      txId: transaction.transactionId || null,
-      checkoutRequestID: transaction.checkoutRequestID || null,
-      rawPayload: transaction
-    });
-
-    console.log("PAYMENT INITIATED:", payment);
+    await pool.query(
+      `INSERT INTO donations(reference, phone, amount, status, tx_id, checkout_request_id, raw_payload)
+       VALUES($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (reference) DO NOTHING`,
+      [
+        reference,
+        phone,
+        Number(amount),
+        "pending",
+        transaction.transactionId || null,
+        transaction.checkoutRequestID || null,
+        JSON.stringify(transaction)
+      ]
+    );
 
     return res.json({
       success: true,
-      reference,
-      transactionId: transaction.transactionId || null
+      reference
     });
 
   } catch (err) {
@@ -145,32 +92,38 @@ app.post('/api/pay', async (req, res) => {
 });
 
 // =====================
-// STEP 2: STATUS CHECK
+// STATUS CHECK
 // =====================
 app.get('/api/status/:reference', async (req, res) => {
   const ref = req.params.reference;
 
-  const payment = await getPaymentByReference(ref);
+  const result = await pool.query(
+    `SELECT * FROM donations WHERE reference = $1`,
+    [ref]
+  );
+
+  const payment = result.rows[0];
 
   if (!payment) {
     return res.json({ status: "pending" });
   }
 
-  if (payment.status === "pending" && payment.txId) {
+  // fallback Lipana check
+  if (payment.status === "pending" && payment.tx_id) {
     try {
-      const transaction = await lipana.transactions.retrieve(payment.txId);
-      const latestStatus = normalizeStatus(transaction.status);
+      const tx = await lipana.transactions.retrieve(payment.tx_id);
+      const newStatus = normalizeStatus(tx.status);
 
-      if (latestStatus && latestStatus !== "pending") {
-        payment.status = latestStatus;
-        await updatePaymentStatus({
-          reference: ref,
-          status: latestStatus,
-          rawPayload: transaction
-        });
+      if (newStatus && newStatus !== "pending") {
+        await pool.query(
+          `UPDATE donations SET status = $1, raw_payload = $2 WHERE reference = $3`,
+          [newStatus, JSON.stringify(tx), ref]
+        );
+
+        payment.status = newStatus;
       }
     } catch (err) {
-      console.error("STATUS LOOKUP ERROR:", err.message || err);
+      console.log("Status check error:", err.message);
     }
   }
 
@@ -180,70 +133,82 @@ app.get('/api/status/:reference', async (req, res) => {
 });
 
 // =====================
-// STEP 3: WEBHOOK
+// WEBHOOK
 // =====================
 app.post('/api/webhook', async (req, res) => {
   console.log("========== WEBHOOK ==========");
   console.log(JSON.stringify(req.body, null, 2));
 
-  const details = extractPaymentDetails(req.body);
-  const event = details.event;
-  let status = details.status;
+  const body = req.body;
 
-  if (!status || status === "pending") {
-    if (event === "transaction.success" || event === "payment.success" || event === "stk.success") {
-      status = "success";
-    }
+  const reference = pickFirst(
+    body.reference,
+    body.accountReference,
+    body.account_reference,
+    body.transaction_id,
+    body.checkout_request_id
+  );
 
-    if (event === "transaction.failed" || event === "transaction.cancelled" || event === "payment.failed" || event === "stk.failed") {
-      status = "failed";
-    }
+  const event = body.event || body.type;
+  const status = normalizeStatus(body.status);
+
+  let finalStatus = status;
+
+  if (!finalStatus || finalStatus === "pending") {
+    if (event?.includes("success")) finalStatus = "success";
+    if (event?.includes("fail") || event?.includes("cancel")) finalStatus = "failed";
   }
 
-  if (status === "success") {
-    console.log("PAYMENT SUCCESS", details);
+  if (reference && finalStatus) {
+    await pool.query(
+      `UPDATE donations SET status = $1, raw_payload = $2 WHERE reference = $3`,
+      [finalStatus, JSON.stringify(body), reference]
+    );
 
-    await updatePaymentStatus({
-      ...details,
-      status: "success",
-      rawPayload: req.body
-    });
-  }
-
-  if (status === "failed") {
-    console.log("PAYMENT FAILED", details);
-
-    await updatePaymentStatus({
-      ...details,
-      status: "failed",
-      rawPayload: req.body
-    });
+    console.log("UPDATED:", reference, finalStatus);
   }
 
   res.status(200).json({ received: true });
 });
 
 // =====================
+// ADMIN API (LIVE DASHBOARD)
+// =====================
+app.get('/api/admin/donations', async (req, res) => {
+  const result = await pool.query(
+    `SELECT * FROM donations ORDER BY created_at DESC LIMIT 100`
+  );
+
+  res.json(result.rows);
+});
+
+// =====================
+// ADMIN SUMMARY (BONUS)
+// =====================
+app.get('/api/admin/summary', async (req, res) => {
+  const total = await pool.query(`SELECT COALESCE(SUM(amount),0) FROM donations`);
+  const success = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='success'`);
+  const failed = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='failed'`);
+
+  res.json({
+    total: total.rows[0].coalesce,
+    success: success.rows[0].count,
+    failed: failed.rows[0].count
+  });
+});
+
+// =====================
+// HEALTH CHECK
+// =====================
 app.get('/health', (req, res) => {
   res.json({ status: "ok" });
 });
 
 // =====================
+// START SERVER
+// =====================
 const PORT = process.env.PORT || 3000;
 
-async function startServer() {
-  await initPaymentStore();
-
-  return app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
-
-if (require.main === module) {
-  startServer().catch((err) => {
-    console.error("Failed to initialize payment database:", err);
-    process.exit(1);
-  });
-}
-
-module.exports = { app, startServer };
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});

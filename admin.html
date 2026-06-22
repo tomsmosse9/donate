@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin Dashboard</title>
+  <style>
+    body {
+      font-family: Arial;
+      margin: 0;
+      background: #0f172a;
+      color: white;
+    }
+
+    header {
+      padding: 20px;
+      background: #111827;
+    }
+
+    .stats {
+      display: flex;
+      gap: 15px;
+      padding: 20px;
+    }
+
+    .card {
+      flex: 1;
+      background: #1e293b;
+      padding: 15px;
+      border-radius: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px;
+      background: #1e293b;
+    }
+
+    th, td {
+      padding: 12px;
+      border: 1px solid #334155;
+      text-align: left;
+    }
+
+    th {
+      background: #111827;
+    }
+
+    .success { color: #22c55e; }
+    .failed { color: #ef4444; }
+    .pending { color: #facc15; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>💰 Donation Admin Dashboard</h1>
+</header>
+
+<div class="stats">
+  <div class="card">
+    <h3>Total Donations</h3>
+    <p id="total">0</p>
+  </div>
+  <div class="card">
+    <h3>Successful</h3>
+    <p id="success">0</p>
+  </div>
+  <div class="card">
+    <h3>Failed</h3>
+    <p id="failed">0</p>
+  </div>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Reference</th>
+      <th>Phone</th>
+      <th>Amount</th>
+      <th>Status</th>
+      <th>Time</th>
+    </tr>
+  </thead>
+  <tbody id="table"></tbody>
+</table>
+
+<script>
+async function loadDashboard() {
+  const res = await fetch('/api/admin/donations');
+  const data = await res.json();
+
+  const table = document.getElementById('table');
+  table.innerHTML = '';
+
+  let total = 0;
+  let success = 0;
+  let failed = 0;
+
+  data.forEach(d => {
+    total += Number(d.amount);
+
+    if (d.status === 'success') success++;
+    if (d.status === 'failed') failed++;
+
+    table.innerHTML += `
+      <tr>
+        <td>${d.reference}</td>
+        <td>${d.phone}</td>
+        <td>KES ${d.amount}</td>
+        <td class="${d.status}">${d.status}</td>
+        <td>${new Date(d.created_at).toLocaleString()}</td>
+      </tr>
+    `;
+  });
+
+  document.getElementById('total').innerText = 'KES ' + total;
+  document.getElementById('success').innerText = success;
+  document.getElementById('failed').innerText = failed;
+}
+
+loadDashboard();
+setInterval(loadDashboard, 3000); // LIVE refresh
+</script>
+
+</body>
+</html>
