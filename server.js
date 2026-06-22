@@ -10,6 +10,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname)));
 
 // =====================
@@ -91,26 +92,40 @@ app.post('/api/webhook', (req, res) => {
   console.log(JSON.stringify(req.body, null, 2));
 
   const event = req.body.event;
-  const data = req.body.data || {};
+  const data = req.body.data || req.body.payload || {};
 
-  const reference = data.reference;
-  const txId = data.transaction_id || data.transactionId;
+  const reference = data.reference || data.accountReference || data.account_reference || req.body.reference || req.body.accountReference || req.body.account_reference;
+  const txId = data.transaction_id || data.transactionId || data.transactionID || req.body.transaction_id || req.body.transactionId || req.body.transactionID;
 
   // SUCCESS
-  if (event === "transaction.success") {
-    console.log("✅ PAYMENT SUCCESS");
+  if (event === "transaction.success" || event === "payment.success" || event === "stk.success") {
+    console.log("✅ PAYMENT SUCCESS", { reference, txId });
 
     if (reference && payments[reference]) {
       payments[reference].status = "success";
     }
+
+    if (!reference && txId) {
+      const matchingKey = Object.keys(payments).find((key) => payments[key].txId === txId);
+      if (matchingKey) {
+        payments[matchingKey].status = "success";
+      }
+    }
   }
 
   // FAILED / CANCELLED
-  if (event === "transaction.failed" || event === "transaction.cancelled") {
-    console.log("❌ PAYMENT FAILED");
+  if (event === "transaction.failed" || event === "transaction.cancelled" || event === "payment.failed" || event === "stk.failed") {
+    console.log("❌ PAYMENT FAILED", { reference, txId });
 
     if (reference && payments[reference]) {
       payments[reference].status = "failed";
+    }
+
+    if (!reference && txId) {
+      const matchingKey = Object.keys(payments).find((key) => payments[key].txId === txId);
+      if (matchingKey) {
+        payments[matchingKey].status = "failed";
+      }
     }
   }
 

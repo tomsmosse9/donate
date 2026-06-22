@@ -28,7 +28,7 @@ async function checkStatus(ref) {
 
     if (data.status === "success") {
       clearInterval(interval);
-      window.location.href = "success.html";
+      window.location.href = "/success.html";
     }
 
     if (data.status === "failed") {
