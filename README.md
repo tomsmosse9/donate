@@ -25,5 +25,18 @@ A professional donation website built with HTML, CSS, JavaScript, and a Node.js 
 The server uses the official Lipana SDK and expects a production or sandbox key in `LIPANA_API_KEY`.
 When running locally, the site serves static files and routes the donation request through `/api/pay`.
 
+## Payment Database
+Payments are saved in PostgreSQL when `DATABASE_URL` is set. This keeps payment records available even after Render restarts or redeploys the app.
+
+On Render:
+1. Open the Render dashboard.
+2. Create a new PostgreSQL database.
+3. Copy the database's internal connection string.
+4. Open this web service's Environment settings.
+5. Add an environment variable named `DATABASE_URL` with that connection string.
+6. Redeploy the web service.
+
+The app creates the `payments` table automatically on startup. If `DATABASE_URL` is missing, the app still runs, but payments use temporary memory storage for local development only.
+
 ## Deploying to your domain
 Deploy the project to a hosted Node.js environment or static site hosting with backend support. Point your domain `https://tomsmosse.site.je/` to the deployed app.
