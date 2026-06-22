@@ -124,3 +124,22 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
+let currentReference = null;
+
+async function checkPayment(reference) {
+  try {
+    const res = await fetch(`/api/status/${reference}`);
+    const data = await res.json();
+
+    if (data.status === "success") {
+      window.location.href = "success.html";
+    }
+
+    if (data.status === "failed") {
+      showToast("Payment failed", "Try again or use a different number", true);
+    }
+
+  } catch (err) {
+    console.error("Status check error", err);
+  }
+}
