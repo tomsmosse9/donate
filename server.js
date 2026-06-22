@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -17,21 +16,15 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
 // ======================
-// MEMORY STORE (IMPORTANT)
+// MEMORY STORE
 // ======================
 const payments = {};
 
 // ======================
 // LIPANA SETUP
 // ======================
-const lipanaApiKey = process.env.LIPANA_API_KEY;
-
-if (!lipanaApiKey) {
-  console.warn("LIPANA_API_KEY is missing!");
-}
-
 const lipana = new Lipana({
-  apiKey: lipanaApiKey,
+  apiKey: process.env.LIPANA_API_KEY,
   environment: process.env.LIPANA_ENV || "sandbox"
 });
 
@@ -43,11 +36,10 @@ app.post('/api/pay', async (req, res) => {
 
   if (!phone || !amount || !reference) {
     return res.status(400).json({
-      error: "phone, amount, and reference are required"
+      error: "phone, amount, reference required"
     });
   }
 
-  // MINIMUM DONATION
   if (Number(amount) < 10) {
     return res.status(400).json({
       error: "Minimum donation is KES 10"
@@ -59,10 +51,9 @@ app.post('/api/pay', async (req, res) => {
       phone,
       amount: Number(amount),
       accountReference: reference,
-      transactionDesc: "Donation to Tomsmosse engineering fund"
+      transactionDesc: "Donation"
     });
 
-    // Store pending payment
     payments[reference] = {
       status: "pending",
       phone,
@@ -83,16 +74,55 @@ app.post('/api/pay', async (req, res) => {
 });
 
 // ======================
-// STATUS CHECK API
+// STATUS CHECK
 // ======================
 app.get('/api/status/:reference', (req, res) => {
   const ref = req.params.reference;
 
   if (!payments[ref]) {
-    return res.json({ status: "not_found" });
+    return res.json({ status: "pending" });
   }
 
-  return res.json(payments[ref]);
+  return res.json({
+    status: payments[ref].status
+  });
+});
+
+// ======================
+// WEBHOOK (IMPORTANT FIX)
+// ======================
+app.post('/api/webhook', (req, res) => {
+  console.log("========== WEBHOOK RECEIVED ==========");
+  console.log(JSON.stringify(req.body, null, 2));
+
+  const event = req.body.event;
+
+  const reference =
+    req.body.reference ||
+    req.body.accountReference ||
+    req.body.transaction_id;
+
+  if (!reference) {
+    return res.status(200).json({ received: true });
+  }
+
+  if (event === "transaction.success") {
+    console.log("✅ PAYMENT SUCCESS");
+
+    payments[reference] = {
+      status: "success"
+    };
+  }
+
+  if (event === "transaction.failed") {
+    console.log("❌ PAYMENT FAILED");
+
+    payments[reference] = {
+      status: "failed"
+    };
+  }
+
+  res.status(200).json({ received: true });
 });
 
 // ======================
@@ -100,34 +130,6 @@ app.get('/api/status/:reference', (req, res) => {
 // ======================
 app.get('/health', (req, res) => {
   res.json({ status: "ok" });
-});
-
-// ======================
-// WEBHOOK
-// ======================
-app.post('/api/webhook', (req, res) => {
-  console.log("========== WEBHOOK RECEIVED ==========");
-  console.log(JSON.stringify(req.body, null, 2));
-
-  const { event, reference } = req.body;
-
-  if (event === "transaction.success") {
-    console.log("✅ PAYMENT SUCCESS");
-
-    if (payments[reference]) {
-      payments[reference].status = "success";
-    }
-  }
-
-  if (event === "transaction.failed") {
-    console.log("❌ PAYMENT FAILED");
-
-    if (payments[reference]) {
-      payments[reference].status = "failed";
-    }
-  }
-
-  res.status(200).json({ received: true });
 });
 
 // ======================
