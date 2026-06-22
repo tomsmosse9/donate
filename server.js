@@ -18,6 +18,82 @@ app.use(express.static(path.join(__dirname)));
 // =====================
 const payments = {};
 
+function pickFirst(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "");
+}
+
+function normalizeStatus(status) {
+  if (!status) return null;
+
+  const normalized = String(status).toLowerCase();
+
+  if (["success", "successful", "completed", "complete", "paid"].includes(normalized)) {
+    return "success";
+  }
+
+  if (["failed", "cancelled", "canceled", "timeout", "timed_out", "expired"].includes(normalized)) {
+    return "failed";
+  }
+
+  return "pending";
+}
+
+function extractPaymentDetails(body = {}) {
+  const data = body.data || body.payload || body.transaction || body.payment || {};
+  const result = data.result || data.callback || {};
+
+  return {
+    event: body.event || body.type || body.eventType,
+    reference: pickFirst(
+      data.reference,
+      data.accountReference,
+      data.account_reference,
+      result.reference,
+      result.accountReference,
+      result.account_reference,
+      body.reference,
+      body.accountReference,
+      body.account_reference
+    ),
+    txId: pickFirst(
+      data.transaction_id,
+      data.transactionId,
+      data.transactionID,
+      data.id,
+      result.transaction_id,
+      result.transactionId,
+      result.transactionID,
+      body.transaction_id,
+      body.transactionId,
+      body.transactionID,
+      body.id
+    ),
+    checkoutRequestID: pickFirst(
+      data.checkoutRequestID,
+      data.checkout_request_id,
+      result.checkoutRequestID,
+      result.checkout_request_id,
+      body.checkoutRequestID,
+      body.checkout_request_id
+    ),
+    status: normalizeStatus(pickFirst(data.status, result.status, body.status))
+  };
+}
+
+function findPaymentKey({ reference, txId, checkoutRequestID }) {
+  if (reference && payments[reference]) {
+    return reference;
+  }
+
+  return Object.keys(payments).find((key) => {
+    const payment = payments[key];
+    return (
+      (txId && payment.txId === txId) ||
+      (checkoutRequestID && payment.checkoutRequestID === checkoutRequestID)
+    );
+  });
+}
+
 // =====================
 // LIPANA SETUP
 // =====================
@@ -51,14 +127,16 @@ app.post('/api/pay', async (req, res) => {
     // IMPORTANT: store using frontend reference
     payments[reference] = {
       status: "pending",
-      txId: transaction.transactionId || null
+      txId: transaction.transactionId || null,
+      checkoutRequestID: transaction.checkoutRequestID || null
     };
 
     console.log("PAYMENT INITIATED:", payments[reference]);
 
     return res.json({
       success: true,
-      reference
+      reference,
+      transactionId: transaction.transactionId || null
     });
 
   } catch (err) {
@@ -70,7 +148,7 @@ app.post('/api/pay', async (req, res) => {
 // =====================
 // STEP 2: STATUS CHECK
 // =====================
-app.get('/api/status/:reference', (req, res) => {
+app.get('/api/status/:reference', async (req, res) => {
   const ref = req.params.reference;
 
   const payment = payments[ref];
@@ -79,53 +157,60 @@ app.get('/api/status/:reference', (req, res) => {
     return res.json({ status: "pending" });
   }
 
+  if (payment.status === "pending" && payment.txId) {
+    try {
+      const transaction = await lipana.transactions.retrieve(payment.txId);
+      const latestStatus = normalizeStatus(transaction.status);
+
+      if (latestStatus && latestStatus !== "pending") {
+        payment.status = latestStatus;
+      }
+    } catch (err) {
+      console.error("STATUS LOOKUP ERROR:", err.message || err);
+    }
+  }
+
   return res.json({
     status: payment.status
   });
 });
 
 // =====================
-// STEP 3: WEBHOOK (CRITICAL FIX)
+// STEP 3: WEBHOOK
 // =====================
 app.post('/api/webhook', (req, res) => {
   console.log("========== WEBHOOK ==========");
   console.log(JSON.stringify(req.body, null, 2));
 
-  const event = req.body.event;
-  const data = req.body.data || req.body.payload || {};
+  const details = extractPaymentDetails(req.body);
+  const event = details.event;
+  let status = details.status;
 
-  const reference = data.reference || data.accountReference || data.account_reference || req.body.reference || req.body.accountReference || req.body.account_reference;
-  const txId = data.transaction_id || data.transactionId || data.transactionID || req.body.transaction_id || req.body.transactionId || req.body.transactionID;
-
-  // SUCCESS
-  if (event === "transaction.success" || event === "payment.success" || event === "stk.success") {
-    console.log("✅ PAYMENT SUCCESS", { reference, txId });
-
-    if (reference && payments[reference]) {
-      payments[reference].status = "success";
+  if (!status || status === "pending") {
+    if (event === "transaction.success" || event === "payment.success" || event === "stk.success") {
+      status = "success";
     }
 
-    if (!reference && txId) {
-      const matchingKey = Object.keys(payments).find((key) => payments[key].txId === txId);
-      if (matchingKey) {
-        payments[matchingKey].status = "success";
-      }
+    if (event === "transaction.failed" || event === "transaction.cancelled" || event === "payment.failed" || event === "stk.failed") {
+      status = "failed";
     }
   }
 
-  // FAILED / CANCELLED
-  if (event === "transaction.failed" || event === "transaction.cancelled" || event === "payment.failed" || event === "stk.failed") {
-    console.log("❌ PAYMENT FAILED", { reference, txId });
+  const matchingKey = findPaymentKey(details);
 
-    if (reference && payments[reference]) {
-      payments[reference].status = "failed";
+  if (status === "success") {
+    console.log("PAYMENT SUCCESS", details);
+
+    if (matchingKey) {
+      payments[matchingKey].status = "success";
     }
+  }
 
-    if (!reference && txId) {
-      const matchingKey = Object.keys(payments).find((key) => payments[key].txId === txId);
-      if (matchingKey) {
-        payments[matchingKey].status = "failed";
-      }
+  if (status === "failed") {
+    console.log("PAYMENT FAILED", details);
+
+    if (matchingKey) {
+      payments[matchingKey].status = "failed";
     }
   }
 
