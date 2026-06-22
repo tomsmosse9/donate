@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Donate to Tomsmosse</title>
+    <meta
+      name="description"
+      content="Send a donation securely with Lipana M-Pesa to support Tomsmosse's software engineering and design journey."
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="container navbar">
+        <a class="brand" href="index.html">
+          <span class="brand-dot"></span>
+          <span>Tomsmosse</span>
+        </a>
+        <nav class="nav-links">
+          <a href="index.html">Home</a>
+          <a href="about.html">About</a>
+          <a href="donate.html">Donate</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="hero">
+        <div class="hero-copy">
+          <span class="hero-badge">Secure donations</span>
+          <h1>Support the learning path with a fast, trusted Lipana payment flow.</h1>
+          <p>
+            Use M-Pesa and Lipana to donate instantly. Enter your phone number and amount, then confirm the payment prompt on your device.
+          </p>
+          <div class="submit-row">
+            <a class="btn-primary" href="#donationForm">Give now</a>
+          </div>
+        </div>
+
+        <div class="hero-image">
+          <img
+            src="https://images.unsplash.com/photo-1545239351-1141bd82e8a6?auto=format&fit=crop&w=1200&q=80"
+            alt="Professional donation workflow imagery"
+          />
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-title">
+          <h2>Donation form</h2>
+        </div>
+        <div class="row">
+          <div class="form-card">
+            <h3>Pay with Lipana M-Pesa</h3>
+            <p>Fill in the details below and receive a prompt on your phone immediately.</p>
+            <form id="donationForm">
+              <div class="form-group">
+                <label for="phone">Phone number</label>
+                <input id="phone" name="phone" type="tel" placeholder="+254712345678" required />
+              </div>
+              <div class="form-group">
+                <label for="amount">Amount (KES)</label>
+                <input id="amount" name="amount" type="number" min="50" step="10" placeholder="2400" required />
+              </div>
+              <div class="form-group">
+                <label for="reference">Reference</label>
+                <input id="reference" name="reference" type="text" placeholder="Donation for growth" required />
+              </div>
+              <div class="submit-row">
+                <button class="btn-primary" id="submitBtn" type="submit">Donate with M-Pesa</button>
+              </div>
+            </form>
+          </div>
+
+          <div>
+            <div class="section-title">
+              <h2>How it works</h2>
+            </div>
+            <div class="features">
+              <div class="card">
+                <h3>1. Enter your details</h3>
+                <p>Provide a valid phone number, donation amount, and reference note for the contribution.</p>
+              </div>
+              <div class="card">
+                <h3>2. Confirm on phone</h3>
+                <p>Your device receives a Lipana M-Pesa prompt. Authorize it with your PIN to complete the payment.</p>
+              </div>
+              <div class="card">
+                <h3>3. See the impact</h3>
+                <p>Every support payment helps fund learning tools, design resources, and projects that shape my professional portfolio.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container footer-grid">
+        <div>
+          <h4>Tomsmosse Donations</h4>
+          <p>Secure, modern donations built on professional design and trusted payment technology.</p>
+        </div>
+        <div>
+          <h4>Quick links</h4>
+          <p><a href="index.html">Home</a></p>
+          <p><a href="about.html">About</a></p>
+        </div>
+        <div>
+          <h4>Need help?</h4>
+          <p><a href="mailto:hello@tomsmosse.site.je">hello@tomsmosse.site.je</a></p>
+        </div>
+      </div>
+    </footer>
+    <div class="toast" id="toast"><span id="toastMessage"></span></div>
+    <script src="script.js"></script>
+  </body>
+</html>
