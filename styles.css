@@ -425,3 +425,12 @@ textarea {
     width: 100%;
   }
 }
+.footer a {
+  color: #4fc3f7;
+  text-decoration: none;
+}
+
+.footer a:hover {
+  text-decoration: underline;
+  color: #ffffff;
+}
