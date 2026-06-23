@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Login</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      align-items: center;
+      background: #0f172a;
+      color: white;
+      display: flex;
+      font-family: Arial, sans-serif;
+      justify-content: center;
+      margin: 0;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    main {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      max-width: 420px;
+      padding: 28px;
+      width: 100%;
+    }
+
+    h1 {
+      font-size: 26px;
+      margin: 0 0 8px;
+    }
+
+    p {
+      color: #cbd5e1;
+      margin: 0 0 24px;
+    }
+
+    label {
+      display: block;
+      font-weight: 700;
+      margin: 16px 0 8px;
+    }
+
+    input {
+      background: #0f172a;
+      border: 1px solid #475569;
+      border-radius: 8px;
+      color: white;
+      font-size: 16px;
+      padding: 12px;
+      width: 100%;
+    }
+
+    button {
+      background: #38bdf8;
+      border: 0;
+      border-radius: 8px;
+      color: #082f49;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 700;
+      margin-top: 22px;
+      padding: 12px;
+      width: 100%;
+    }
+
+    .error {
+      color: #fca5a5;
+      margin-top: 14px;
+      min-height: 20px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Admin Login</h1>
+    <p>Sign in to view donation records.</p>
+
+    <form id="loginForm">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required />
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+
+      <button id="loginBtn" type="submit">Login</button>
+      <div class="error" id="errorMessage"></div>
+    </form>
+  </main>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const button = document.getElementById('loginBtn');
+    const errorMessage = document.getElementById('errorMessage');
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      errorMessage.textContent = '';
+      button.disabled = true;
+      button.textContent = 'Checking...';
+
+      try {
+        const response = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: form.username.value,
+            password: form.password.value
+          })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || 'Login failed');
+        }
+
+        window.location.href = '/admin.html';
+      } catch (error) {
+        errorMessage.textContent = error.message;
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Login';
+      }
+    });
+  </script>
+</body>
+</html>
