@@ -2,18 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin Dashboard</title>
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: Arial;
-      margin: 0;
       background: #0f172a;
       color: white;
+      font-family: Arial, sans-serif;
+      margin: 0;
     }
 
     header {
-      padding: 20px;
+      align-items: center;
       background: #111827;
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      padding: 20px;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin: 0;
+    }
+
+    button {
+      background: #38bdf8;
+      border: 0;
+      border-radius: 8px;
+      color: #082f49;
+      cursor: pointer;
+      font-weight: 700;
+      padding: 10px 14px;
     }
 
     .stats {
@@ -23,22 +47,23 @@
     }
 
     .card {
-      flex: 1;
       background: #1e293b;
+      border-radius: 8px;
+      flex: 1;
       padding: 15px;
-      border-radius: 10px;
     }
 
     table {
-      width: 100%;
+      background: #1e293b;
       border-collapse: collapse;
       margin: 20px;
-      background: #1e293b;
+      width: calc(100% - 40px);
     }
 
-    th, td {
-      padding: 12px;
+    th,
+    td {
       border: 1px solid #334155;
+      padding: 12px;
       text-align: left;
     }
 
@@ -52,76 +77,85 @@
   </style>
 </head>
 <body>
+  <header>
+    <h1>Donation Admin Dashboard</h1>
+    <button id="logoutBtn" type="button">Logout</button>
+  </header>
 
-<header>
-  <h1>💰 Donation Admin Dashboard</h1>
-</header>
-
-<div class="stats">
-  <div class="card">
-    <h3>Total Donations</h3>
-    <p id="total">0</p>
+  <div class="stats">
+    <div class="card">
+      <h3>Total Donations</h3>
+      <p id="total">0</p>
+    </div>
+    <div class="card">
+      <h3>Successful</h3>
+      <p id="success">0</p>
+    </div>
+    <div class="card">
+      <h3>Failed</h3>
+      <p id="failed">0</p>
+    </div>
   </div>
-  <div class="card">
-    <h3>Successful</h3>
-    <p id="success">0</p>
-  </div>
-  <div class="card">
-    <h3>Failed</h3>
-    <p id="failed">0</p>
-  </div>
-</div>
 
-<table>
-  <thead>
-    <tr>
-      <th>Reference</th>
-      <th>Phone</th>
-      <th>Amount</th>
-      <th>Status</th>
-      <th>Time</th>
-    </tr>
-  </thead>
-  <tbody id="table"></tbody>
-</table>
-
-<script>
-async function loadDashboard() {
-  const res = await fetch('/api/admin/donations');
-  const data = await res.json();
-
-  const table = document.getElementById('table');
-  table.innerHTML = '';
-
-  let total = 0;
-  let success = 0;
-  let failed = 0;
-
-  data.forEach(d => {
-    total += Number(d.amount);
-
-    if (d.status === 'success') success++;
-    if (d.status === 'failed') failed++;
-
-    table.innerHTML += `
+  <table>
+    <thead>
       <tr>
-        <td>${d.reference}</td>
-        <td>${d.phone}</td>
-        <td>KES ${d.amount}</td>
-        <td class="${d.status}">${d.status}</td>
-        <td>${new Date(d.created_at).toLocaleString()}</td>
+        <th>Reference</th>
+        <th>Phone</th>
+        <th>Amount</th>
+        <th>Status</th>
+        <th>Time</th>
       </tr>
-    `;
-  });
+    </thead>
+    <tbody id="table"></tbody>
+  </table>
 
-  document.getElementById('total').innerText = 'KES ' + total;
-  document.getElementById('success').innerText = success;
-  document.getElementById('failed').innerText = failed;
-}
+  <script>
+    async function loadDashboard() {
+      const res = await fetch('/api/admin/donations');
 
-loadDashboard();
-setInterval(loadDashboard, 3000); // LIVE refresh
-</script>
+      if (res.status === 401) {
+        window.location.href = '/admin-login.html';
+        return;
+      }
 
+      const data = await res.json();
+      const table = document.getElementById('table');
+      table.innerHTML = '';
+
+      let total = 0;
+      let success = 0;
+      let failed = 0;
+
+      data.forEach((d) => {
+        total += Number(d.amount);
+
+        if (d.status === 'success') success++;
+        if (d.status === 'failed') failed++;
+
+        table.innerHTML += `
+          <tr>
+            <td>${d.reference}</td>
+            <td>${d.phone}</td>
+            <td>KES ${d.amount}</td>
+            <td class="${d.status}">${d.status}</td>
+            <td>${new Date(d.created_at).toLocaleString()}</td>
+          </tr>
+        `;
+      });
+
+      document.getElementById('total').innerText = 'KES ' + total;
+      document.getElementById('success').innerText = success;
+      document.getElementById('failed').innerText = failed;
+    }
+
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/admin/logout', { method: 'POST' });
+      window.location.href = '/admin-login.html';
+    });
+
+    loadDashboard();
+    setInterval(loadDashboard, 3000);
+  </script>
 </body>
 </html>

@@ -2,10 +2,12 @@ const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const crypto = require('crypto');
 const { Lipana } = require('@lipana/sdk');
-const pool = require('./db');
 
 dotenv.config();
+
+const pool = require('./db');
 
 const app = express();
 
@@ -15,7 +17,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname)));
 
 // =====================
 // HELPERS
@@ -35,6 +36,78 @@ function pickFirst(...vals) {
   return vals.find(v => v !== undefined && v !== null && v !== "");
 }
 
+const ADMIN_COOKIE_NAME = "admin_session";
+const ADMIN_SESSION_MS = 1000 * 60 * 60 * 8;
+
+function getCookies(req) {
+  return Object.fromEntries(
+    (req.headers.cookie || "")
+      .split(";")
+      .filter(Boolean)
+      .map((cookie) => {
+        const [name, ...value] = cookie.trim().split("=");
+        return [name, decodeURIComponent(value.join("="))];
+      })
+  );
+}
+
+function signAdminToken(username, expiresAt) {
+  return crypto
+    .createHmac("sha256", process.env.ADMIN_SESSION_SECRET)
+    .update(`${username}.${expiresAt}`)
+    .digest("hex");
+}
+
+function createAdminToken(username) {
+  const expiresAt = Date.now() + ADMIN_SESSION_MS;
+  const signature = signAdminToken(username, expiresAt);
+  return Buffer.from(`${username}.${expiresAt}.${signature}`).toString("base64url");
+}
+
+function verifyAdminToken(token) {
+  if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD || !process.env.ADMIN_SESSION_SECRET) {
+    return false;
+  }
+
+  try {
+    const decoded = Buffer.from(token, "base64url").toString("utf8");
+    const [username, expiresAt, signature] = decoded.split(".");
+
+    if (!username || !expiresAt || !signature) return false;
+    if (username !== process.env.ADMIN_USERNAME) return false;
+    if (Number(expiresAt) < Date.now()) return false;
+
+    const expected = signAdminToken(username, expiresAt);
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
+function requireAdmin(req, res, next) {
+  const token = getCookies(req)[ADMIN_COOKIE_NAME];
+
+  if (verifyAdminToken(token)) {
+    return next();
+  }
+
+  if (req.path.startsWith("/api/")) {
+    return res.status(401).json({ error: "Admin login required" });
+  }
+
+  return res.redirect("/admin-login.html");
+}
+
+function setAdminCookie(res, token) {
+  const secure = process.env.NODE_ENV === "production";
+  res.cookie(ADMIN_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure,
+    maxAge: ADMIN_SESSION_MS
+  });
+}
+
 // =====================
 // LIPANA INIT
 // =====================
@@ -42,6 +115,41 @@ const lipana = new Lipana({
   apiKey: process.env.LIPANA_API_KEY,
   environment: process.env.LIPANA_ENV || "sandbox"
 });
+
+// =====================
+// ADMIN AUTH
+// =====================
+app.post('/api/admin/login', (req, res) => {
+  const { username, password } = req.body;
+
+  if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD || !process.env.ADMIN_SESSION_SECRET) {
+    return res.status(503).json({ error: "Admin login is not configured" });
+  }
+
+  if (username !== process.env.ADMIN_USERNAME || password !== process.env.ADMIN_PASSWORD) {
+    return res.status(401).json({ error: "Invalid login details" });
+  }
+
+  setAdminCookie(res, createAdminToken(username));
+  res.json({ success: true });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  res.clearCookie(ADMIN_COOKIE_NAME);
+  res.json({ success: true });
+});
+
+app.get('/admin', requireAdmin, (req, res) => {
+  res.sendFile(path.join(__dirname, 'admin.html'));
+});
+
+app.get('/admin.html', requireAdmin, (req, res) => {
+  res.sendFile(path.join(__dirname, 'admin.html'));
+});
+
+app.use(express.static(path.join(__dirname), {
+  index: 'index.html'
+}));
 
 // =====================
 // INITIATE PAYMENT
@@ -174,7 +282,7 @@ app.post('/api/webhook', async (req, res) => {
 // =====================
 // ADMIN API (LIVE DASHBOARD)
 // =====================
-app.get('/api/admin/donations', async (req, res) => {
+app.get('/api/admin/donations', requireAdmin, async (req, res) => {
   const result = await pool.query(
     `SELECT * FROM donations ORDER BY created_at DESC LIMIT 100`
   );
@@ -185,7 +293,7 @@ app.get('/api/admin/donations', async (req, res) => {
 // =====================
 // ADMIN SUMMARY (BONUS)
 // =====================
-app.get('/api/admin/summary', async (req, res) => {
+app.get('/api/admin/summary', requireAdmin, async (req, res) => {
   const total = await pool.query(`SELECT COALESCE(SUM(amount),0) FROM donations`);
   const success = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='success'`);
   const failed = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='failed'`);
