@@ -36,65 +36,6 @@ function pickFirst(...vals) {
 }
 
 // =====================
-// ADMIN COOKIE
-// =====================
-const ADMIN_COOKIE_NAME = "admin_session";
-const ADMIN_SESSION_MS = 1000 * 60 * 60 * 8;
-
-// simple cookie parser
-function getCookies(req) {
-  return Object.fromEntries(
-    (req.headers.cookie || "")
-      .split(";")
-      .filter(Boolean)
-      .map(c => {
-        const [k, ...v] = c.trim().split("=");
-        return [k, decodeURIComponent(v.join("="))];
-      })
-  );
-}
-
-function sign(username, exp) {
-  return crypto
-    .createHmac("sha256", process.env.ADMIN_SESSION_SECRET)
-    .update(`${username}.${exp}`)
-    .digest("hex");
-}
-
-function createToken(username) {
-  const exp = Date.now() + ADMIN_SESSION_MS;
-  const sig = sign(username, exp);
-  return Buffer.from(`${username}.${exp}.${sig}`).toString("base64url");
-}
-
-function verifyToken(token) {
-  try {
-    const decoded = Buffer.from(token, "base64url").toString();
-    const [u, exp, sig] = decoded.split(".");
-
-    if (u !== process.env.ADMIN_USERNAME) return false;
-    if (Number(exp) < Date.now()) return false;
-
-    const expected = sign(u, exp);
-    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
-  } catch {
-    return false;
-  }
-}
-
-function requireAdmin(req, res, next) {
-  const token = getCookies(req)[ADMIN_COOKIE_NAME];
-
-  if (token && verifyToken(token)) return next();
-
-  if (req.path.startsWith("/api/")) {
-    return res.status(401).json({ error: "Admin login required" });
-  }
-
-  return res.redirect("/admin-login.html");
-}
-
-// =====================
 // LIPANA
 // =====================
 const lipana = new Lipana({
@@ -103,31 +44,7 @@ const lipana = new Lipana({
 });
 
 // =====================
-// ADMIN LOGIN
-// =====================
-app.post('/api/admin/login', (req, res) => {
-  const { username, password } = req.body;
-
-  if (
-    username === process.env.ADMIN_USERNAME &&
-    password === process.env.ADMIN_PASSWORD
-  ) {
-    const token = createToken(username);
-
-    res.cookie(ADMIN_COOKIE_NAME, token, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: false
-    });
-
-    return res.json({ success: true });
-  }
-
-  res.status(401).json({ error: "Invalid login" });
-});
-
-// =====================
-// PAYMENT
+// PAY
 // =====================
 app.post('/api/pay', async (req, res) => {
   const { phone, amount, reference } = req.body;
@@ -168,7 +85,7 @@ app.get('/api/status/:reference', async (req, res) => {
   const { reference } = req.params;
 
   const result = await pool.query(
-    `SELECT * FROM donations WHERE reference=$1`,
+    `SELECT status FROM donations WHERE reference=$1`,
     [reference]
   );
 
@@ -178,52 +95,47 @@ app.get('/api/status/:reference', async (req, res) => {
 });
 
 // =====================
-// 🔥 FIXED WEBHOOK (IMPORTANT)
+// FIXED WEBHOOK (IMPORTANT)
 // =====================
 app.post('/api/webhook', async (req, res) => {
-  console.log("WEBHOOK:", JSON.stringify(req.body, null, 2));
+  console.log("WEBHOOK RECEIVED:", JSON.stringify(req.body, null, 2));
 
   try {
-    const data = req.body.data || req.body;
+    const payload = req.body;
+    const data = payload.data || payload;
 
-    const reference = data.reference;
-    const status = normalizeStatus(data.status || req.body.event);
+    const reference = data.reference || data.transaction_id;
+    const status = normalizeStatus(data.status || payload.event);
 
-    if (reference && status) {
-      await pool.query(
-        `UPDATE donations
-         SET status=$1, raw_payload=$2, updated_at=NOW()
-         WHERE reference=$3`,
-        [status, JSON.stringify(req.body), reference]
-      );
+    if (!reference) return res.json({ ok: true });
 
-      console.log("UPDATED:", reference, status);
-    } else {
-      console.log("NO MATCH:", data);
-    }
+    await pool.query(
+      `UPDATE donations
+       SET status=$1, raw_payload=$2, updated_at=NOW()
+       WHERE reference=$3`,
+      [status, JSON.stringify(payload), reference]
+    );
+
+    console.log(`UPDATED ${reference} → ${status}`);
 
     res.json({ ok: true });
-  } catch (e) {
-    console.error(e);
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "webhook failed" });
   }
 });
 
 // =====================
-// ADMIN DATA
+// ADMIN
 // =====================
-app.get('/api/admin/donations', requireAdmin, async (req, res) => {
+app.get('/api/admin/donations', async (req, res) => {
   const result = await pool.query(
     `SELECT * FROM donations ORDER BY created_at DESC LIMIT 100`
   );
-
   res.json(result.rows);
 });
 
-// =====================
-// SUMMARY FIX
-// =====================
-app.get('/api/admin/summary', requireAdmin, async (req, res) => {
+app.get('/api/admin/summary', async (req, res) => {
   const total = await pool.query(`SELECT COALESCE(SUM(amount),0) FROM donations`);
   const success = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='success'`);
   const failed = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='failed'`);
@@ -236,10 +148,12 @@ app.get('/api/admin/summary', requireAdmin, async (req, res) => {
 });
 
 // =====================
+// STATIC
+// =====================
 app.use(express.static(path.join(__dirname)));
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log("Server running");
+  console.log("Server running...");
 });
