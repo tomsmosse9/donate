@@ -26,8 +26,8 @@ function normalizeStatus(status) {
 
   const s = String(status).toLowerCase();
 
-  if (["success", "successful", "completed", "paid"].includes(s)) return "success";
-  if (["failed", "cancelled", "canceled", "timeout"].includes(s)) return "failed";
+  if (["success", "successful", "completed", "paid", "0"].includes(s)) return "success";
+  if (["failed", "cancelled", "canceled", "timeout", "1"].includes(s)) return "failed";
 
   return "pending";
 }
@@ -205,82 +205,78 @@ app.post('/api/pay', async (req, res) => {
 app.get('/api/status/:reference', async (req, res) => {
   const ref = req.params.reference;
 
-  const result = await pool.query(
-    `SELECT * FROM donations WHERE reference = $1`,
-    [ref]
-  );
-
-  const payment = result.rows[0];
-
-  if (!payment) {
-    return res.json({ status: "pending" });
-  }
-
-  // fallback Lipana check
-  if (payment.status === "pending" && payment.tx_id) {
-    try {
-      const tx = await lipana.transactions.retrieve(payment.tx_id);
-      const newStatus = normalizeStatus(tx.status);
-
-      if (newStatus && newStatus !== "pending") {
-        await pool.query(
-          `UPDATE donations SET status = $1, raw_payload = $2 WHERE reference = $3`,
-          [newStatus, JSON.stringify(tx), ref]
-        );
-
-        payment.status = newStatus;
-      }
-    } catch (err) {
-      console.log("Status check error:", err.message);
-    }
-  }
-
-  return res.json({
-    status: payment.status
-  });
-});
-
-// =====================
-// WEBHOOK
-// =====================
-app.post('/api/webhook', async (req, res) => {
-  console.log("========== WEBHOOK ==========");
-  console.log(JSON.stringify(req.body, null, 2));
-
-  const body = req.body;
-
-  const reference = pickFirst(
-    body.reference,
-    body.accountReference,
-    body.account_reference,
-    body.transaction_id,
-    body.checkout_request_id
-  );
-
-  const event = body.event || body.type;
-  const status = normalizeStatus(body.status);
-
-  let finalStatus = status;
-
-  if (!finalStatus || finalStatus === "pending") {
-    if (event?.includes("success")) finalStatus = "success";
-    if (event?.includes("fail") || event?.includes("cancel")) finalStatus = "failed";
-  }
-
-  if (reference && finalStatus) {
-    await pool.query(
-      `UPDATE donations SET status = $1, raw_payload = $2 WHERE reference = $3`,
-      [finalStatus, JSON.stringify(body), reference]
+  try {
+    const result = await pool.query(
+      `SELECT * FROM donations WHERE reference = $1`,
+      [ref]
     );
 
-    console.log("UPDATED:", reference, finalStatus);
-  }
+    let payment = result.rows[0];
 
-  res.status(200).json({ received: true });
+    if (!payment) {
+      return res.json({ status: "pending" });
+    }
+
+    return res.json({
+      status: payment.status || "pending"
+    });
+
+  } catch (err) {
+    console.error("Status check error:", err.message);
+    return res.status(500).json({ error: "Server error", status: "pending" });
+  }
 });
 
 // =====================
-// ADMIN API (LIVE DASHBOARD)
+// WEBHOOK (IMPROVED)
+// =====================
+app.post('/api/webhook', async (req, res) => {
+  console.log("========== WEBHOOK RECEIVED ==========");
+  console.log("Full Body:", JSON.stringify(req.body, null, 2));
+
+  try {
+    const body = req.body;
+
+    const reference = pickFirst(
+      body.reference,
+      body.accountReference,
+      body.account_reference,
+      body.transaction_id,
+      body.checkout_request_id,
+      body.CheckoutRequestID
+    );
+
+    const newStatus = normalizeStatus(body.status || body.ResultCode || body.resultCode);
+
+    if (reference && newStatus && newStatus !== "pending") {
+      const updateResult = await pool.query(
+        `UPDATE donations 
+         SET status = $1, 
+             raw_payload = $2, 
+             updated_at = NOW()
+         WHERE reference = $3 
+         RETURNING *`,
+        [newStatus, JSON.stringify(body), reference]
+      );
+
+      if (updateResult.rowCount > 0) {
+        console.log(`✅ WEBHOOK SUCCESS: Updated ${reference} → ${newStatus}`);
+      } else {
+        console.log(`⚠️ WEBHOOK: Reference ${reference} not found in DB`);
+      }
+    } else {
+      console.log("⚠️ WEBHOOK: Could not determine reference or status");
+    }
+
+    res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("❌ WEBHOOK ERROR:", err.message);
+    res.status(500).json({ error: "Webhook processing failed" });
+  }
+});
+
+// =====================
+// ADMIN API
 // =====================
 app.get('/api/admin/donations', requireAdmin, async (req, res) => {
   const result = await pool.query(
@@ -290,9 +286,6 @@ app.get('/api/admin/donations', requireAdmin, async (req, res) => {
   res.json(result.rows);
 });
 
-// =====================
-// ADMIN SUMMARY (BONUS)
-// =====================
 app.get('/api/admin/summary', requireAdmin, async (req, res) => {
   const total = await pool.query(`SELECT COALESCE(SUM(amount),0) FROM donations`);
   const success = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='success'`);
@@ -318,5 +311,6 @@ app.get('/health', (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`📊 Database: ${process.env.DATABASE_URL ? 'PostgreSQL' : 'Memory fallback (not persistent)'}`);
 });
