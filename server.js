@@ -10,33 +10,33 @@ dotenv.config();
 const pool = require('./db');
 const app = express();
 
-// =====================
-// MIDDLEWARE
-// =====================
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // =====================
-// HELPERS
+// STATUS NORMALIZER (FIXED)
 // =====================
 function normalizeStatus(status) {
   if (!status) return "pending";
 
   const s = String(status).toLowerCase();
 
-  if (["success", "successful", "completed", "paid", "0"].includes(s)) return "success";
-  if (["failed", "cancelled", "canceled", "timeout", "1"].includes(s)) return "failed";
+  if (s.includes("success") || s === "0") return "success";
+  if (s.includes("fail") || s === "1") return "failed";
 
   return "pending";
 }
 
+// =====================
+// PICK VALUE HELPERS
+// =====================
 function pickFirst(...vals) {
   return vals.find(v => v !== undefined && v !== null && v !== "");
 }
 
 // =====================
-// LIPANA
+// LIPANA INIT
 // =====================
 const lipana = new Lipana({
   apiKey: process.env.LIPANA_API_KEY,
@@ -44,7 +44,7 @@ const lipana = new Lipana({
 });
 
 // =====================
-// PAY
+// PAYMENT INIT
 // =====================
 app.post('/api/pay', async (req, res) => {
   const { phone, amount, reference } = req.body;
@@ -71,7 +71,8 @@ app.post('/api/pay', async (req, res) => {
       ]
     );
 
-    res.json({ success: true });
+    res.json({ success: true, reference });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Payment failed" });
@@ -79,7 +80,7 @@ app.post('/api/pay', async (req, res) => {
 });
 
 // =====================
-// STATUS
+// STATUS CHECK (IMPORTANT FIX)
 // =====================
 app.get('/api/status/:reference', async (req, res) => {
   const { reference } = req.params;
@@ -95,46 +96,63 @@ app.get('/api/status/:reference', async (req, res) => {
 });
 
 // =====================
-// FIXED WEBHOOK (IMPORTANT)
+// 🔥 FIXED WEBHOOK (THIS IS THE MAIN BUG FIX)
 // =====================
 app.post('/api/webhook', async (req, res) => {
   console.log("WEBHOOK RECEIVED:", JSON.stringify(req.body, null, 2));
 
   try {
-    const payload = req.body;
-    const data = payload.data || payload;
+    const data = req.body.data || req.body;
 
-    const reference = data.reference || data.transaction_id;
-    const status = normalizeStatus(data.status || payload.event);
+    const reference =
+      data.reference ||
+      data.accountReference ||
+      data.transaction_id;
 
-    if (!reference) return res.json({ ok: true });
+    const status = normalizeStatus(
+      data.status || req.body.event
+    );
+
+    console.log("PARSED:", { reference, status });
+
+    if (!reference) {
+      console.log("❌ NO REFERENCE FOUND");
+      return res.json({ ok: false });
+    }
 
     await pool.query(
       `UPDATE donations
-       SET status=$1, raw_payload=$2, updated_at=NOW()
+       SET status=$1,
+           raw_payload=$2,
+           updated_at=NOW()
        WHERE reference=$3`,
-      [status, JSON.stringify(payload), reference]
+      [status, JSON.stringify(req.body), reference]
     );
 
-    console.log(`UPDATED ${reference} → ${status}`);
+    console.log(`✅ UPDATED ${reference} → ${status}`);
 
     res.json({ ok: true });
+
   } catch (err) {
-    console.error(err);
+    console.error("WEBHOOK ERROR:", err);
     res.status(500).json({ error: "webhook failed" });
   }
 });
 
 // =====================
-// ADMIN
+// ADMIN DATA
 // =====================
 app.get('/api/admin/donations', async (req, res) => {
   const result = await pool.query(
     `SELECT * FROM donations ORDER BY created_at DESC LIMIT 100`
   );
+
   res.json(result.rows);
 });
 
+// =====================
+// SUMMARY FIX
+// =====================
 app.get('/api/admin/summary', async (req, res) => {
   const total = await pool.query(`SELECT COALESCE(SUM(amount),0) FROM donations`);
   const success = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='success'`);
@@ -148,12 +166,8 @@ app.get('/api/admin/summary', async (req, res) => {
 });
 
 // =====================
-// STATIC
-// =====================
 app.use(express.static(path.join(__dirname)));
 
-app.get('/health', (req, res) => res.json({ ok: true }));
-
 app.listen(process.env.PORT || 3000, () => {
-  console.log("Server running...");
+  console.log("Server running");
 });
