@@ -8,7 +8,6 @@ const { Lipana } = require('@lipana/sdk');
 dotenv.config();
 
 const pool = require('./db');
-
 const app = express();
 
 // =====================
@@ -36,49 +35,48 @@ function pickFirst(...vals) {
   return vals.find(v => v !== undefined && v !== null && v !== "");
 }
 
+// =====================
+// ADMIN COOKIE
+// =====================
 const ADMIN_COOKIE_NAME = "admin_session";
 const ADMIN_SESSION_MS = 1000 * 60 * 60 * 8;
 
+// simple cookie parser
 function getCookies(req) {
   return Object.fromEntries(
     (req.headers.cookie || "")
       .split(";")
       .filter(Boolean)
-      .map((cookie) => {
-        const [name, ...value] = cookie.trim().split("=");
-        return [name, decodeURIComponent(value.join("="))];
+      .map(c => {
+        const [k, ...v] = c.trim().split("=");
+        return [k, decodeURIComponent(v.join("="))];
       })
   );
 }
 
-function signAdminToken(username, expiresAt) {
+function sign(username, exp) {
   return crypto
     .createHmac("sha256", process.env.ADMIN_SESSION_SECRET)
-    .update(`${username}.${expiresAt}`)
+    .update(`${username}.${exp}`)
     .digest("hex");
 }
 
-function createAdminToken(username) {
-  const expiresAt = Date.now() + ADMIN_SESSION_MS;
-  const signature = signAdminToken(username, expiresAt);
-  return Buffer.from(`${username}.${expiresAt}.${signature}`).toString("base64url");
+function createToken(username) {
+  const exp = Date.now() + ADMIN_SESSION_MS;
+  const sig = sign(username, exp);
+  return Buffer.from(`${username}.${exp}.${sig}`).toString("base64url");
 }
 
-function verifyAdminToken(token) {
-  if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD || !process.env.ADMIN_SESSION_SECRET) {
-    return false;
-  }
-
+function verifyToken(token) {
   try {
-    const decoded = Buffer.from(token, "base64url").toString("utf8");
-    const [username, expiresAt, signature] = decoded.split(".");
+    const decoded = Buffer.from(token, "base64url").toString();
+    const [u, exp, sig] = decoded.split(".");
 
-    if (!username || !expiresAt || !signature) return false;
-    if (username !== process.env.ADMIN_USERNAME) return false;
-    if (Number(expiresAt) < Date.now()) return false;
+    if (u !== process.env.ADMIN_USERNAME) return false;
+    if (Number(exp) < Date.now()) return false;
 
-    const expected = signAdminToken(username, expiresAt);
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    const expected = sign(u, exp);
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
   } catch {
     return false;
   }
@@ -87,9 +85,7 @@ function verifyAdminToken(token) {
 function requireAdmin(req, res, next) {
   const token = getCookies(req)[ADMIN_COOKIE_NAME];
 
-  if (verifyAdminToken(token)) {
-    return next();
-  }
+  if (token && verifyToken(token)) return next();
 
   if (req.path.startsWith("/api/")) {
     return res.status(401).json({ error: "Admin login required" });
@@ -98,18 +94,8 @@ function requireAdmin(req, res, next) {
   return res.redirect("/admin-login.html");
 }
 
-function setAdminCookie(res, token) {
-  const secure = process.env.NODE_ENV === "production";
-  res.cookie(ADMIN_COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure,
-    maxAge: ADMIN_SESSION_MS
-  });
-}
-
 // =====================
-// LIPANA INIT
+// LIPANA
 // =====================
 const lipana = new Lipana({
   apiKey: process.env.LIPANA_API_KEY,
@@ -117,56 +103,37 @@ const lipana = new Lipana({
 });
 
 // =====================
-// ADMIN AUTH
+// ADMIN LOGIN
 // =====================
 app.post('/api/admin/login', (req, res) => {
   const { username, password } = req.body;
 
-  if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD || !process.env.ADMIN_SESSION_SECRET) {
-    return res.status(503).json({ error: "Admin login is not configured" });
+  if (
+    username === process.env.ADMIN_USERNAME &&
+    password === process.env.ADMIN_PASSWORD
+  ) {
+    const token = createToken(username);
+
+    res.cookie(ADMIN_COOKIE_NAME, token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: false
+    });
+
+    return res.json({ success: true });
   }
 
-  if (username !== process.env.ADMIN_USERNAME || password !== process.env.ADMIN_PASSWORD) {
-    return res.status(401).json({ error: "Invalid login details" });
-  }
-
-  setAdminCookie(res, createAdminToken(username));
-  res.json({ success: true });
+  res.status(401).json({ error: "Invalid login" });
 });
-
-app.post('/api/admin/logout', (req, res) => {
-  res.clearCookie(ADMIN_COOKIE_NAME);
-  res.json({ success: true });
-});
-
-app.get('/admin', requireAdmin, (req, res) => {
-  res.sendFile(path.join(__dirname, 'admin.html'));
-});
-
-app.get('/admin.html', requireAdmin, (req, res) => {
-  res.sendFile(path.join(__dirname, 'admin.html'));
-});
-
-app.use(express.static(path.join(__dirname), {
-  index: 'index.html'
-}));
 
 // =====================
-// INITIATE PAYMENT
+// PAYMENT
 // =====================
 app.post('/api/pay', async (req, res) => {
   const { phone, amount, reference } = req.body;
 
-  if (!phone || !amount || !reference) {
-    return res.status(400).json({ error: "Missing fields" });
-  }
-
-  if (Number(amount) < 10) {
-    return res.status(400).json({ error: "Minimum donation is KES 10" });
-  }
-
   try {
-    const transaction = await lipana.transactions.initiateStkPush({
+    const tx = await lipana.transactions.initiateStkPush({
       phone,
       amount: Number(amount),
       accountReference: reference,
@@ -174,109 +141,76 @@ app.post('/api/pay', async (req, res) => {
     });
 
     await pool.query(
-      `INSERT INTO donations(reference, phone, amount, status, tx_id, checkout_request_id, raw_payload)
-       VALUES($1,$2,$3,$4,$5,$6,$7)
+      `INSERT INTO donations(reference, phone, amount, status, tx_id, raw_payload)
+       VALUES($1,$2,$3,$4,$5,$6)
        ON CONFLICT (reference) DO NOTHING`,
       [
         reference,
         phone,
-        Number(amount),
+        amount,
         "pending",
-        transaction.transactionId || null,
-        transaction.checkoutRequestID || null,
-        JSON.stringify(transaction)
+        tx.transactionId || null,
+        JSON.stringify(tx)
       ]
     );
 
-    return res.json({
-      success: true,
-      reference
-    });
-
+    res.json({ success: true });
   } catch (err) {
-    console.error("PAY ERROR:", err);
-    return res.status(500).json({ error: "Payment failed" });
+    console.error(err);
+    res.status(500).json({ error: "Payment failed" });
   }
 });
 
 // =====================
-// STATUS CHECK
+// STATUS
 // =====================
 app.get('/api/status/:reference', async (req, res) => {
-  const ref = req.params.reference;
+  const { reference } = req.params;
 
-  try {
-    const result = await pool.query(
-      `SELECT * FROM donations WHERE reference = $1`,
-      [ref]
-    );
+  const result = await pool.query(
+    `SELECT * FROM donations WHERE reference=$1`,
+    [reference]
+  );
 
-    let payment = result.rows[0];
-
-    if (!payment) {
-      return res.json({ status: "pending" });
-    }
-
-    return res.json({
-      status: payment.status || "pending"
-    });
-
-  } catch (err) {
-    console.error("Status check error:", err.message);
-    return res.status(500).json({ error: "Server error", status: "pending" });
-  }
+  res.json({
+    status: result.rows[0]?.status || "pending"
+  });
 });
 
 // =====================
-// WEBHOOK (IMPROVED)
+// 🔥 FIXED WEBHOOK (IMPORTANT)
 // =====================
 app.post('/api/webhook', async (req, res) => {
-  console.log("========== WEBHOOK RECEIVED ==========");
-  console.log("Full Body:", JSON.stringify(req.body, null, 2));
+  console.log("WEBHOOK:", JSON.stringify(req.body, null, 2));
 
   try {
-    const body = req.body;
+    const data = req.body.data || req.body;
 
-    const reference = pickFirst(
-      body.reference,
-      body.accountReference,
-      body.account_reference,
-      body.transaction_id,
-      body.checkout_request_id,
-      body.CheckoutRequestID
-    );
+    const reference = data.reference;
+    const status = normalizeStatus(data.status || req.body.event);
 
-    const newStatus = normalizeStatus(body.status || body.ResultCode || body.resultCode);
-
-    if (reference && newStatus && newStatus !== "pending") {
-      const updateResult = await pool.query(
-        `UPDATE donations 
-         SET status = $1, 
-             raw_payload = $2, 
-             updated_at = NOW()
-         WHERE reference = $3 
-         RETURNING *`,
-        [newStatus, JSON.stringify(body), reference]
+    if (reference && status) {
+      await pool.query(
+        `UPDATE donations
+         SET status=$1, raw_payload=$2, updated_at=NOW()
+         WHERE reference=$3`,
+        [status, JSON.stringify(req.body), reference]
       );
 
-      if (updateResult.rowCount > 0) {
-        console.log(`✅ WEBHOOK SUCCESS: Updated ${reference} → ${newStatus}`);
-      } else {
-        console.log(`⚠️ WEBHOOK: Reference ${reference} not found in DB`);
-      }
+      console.log("UPDATED:", reference, status);
     } else {
-      console.log("⚠️ WEBHOOK: Could not determine reference or status");
+      console.log("NO MATCH:", data);
     }
 
-    res.status(200).json({ received: true });
-  } catch (err) {
-    console.error("❌ WEBHOOK ERROR:", err.message);
-    res.status(500).json({ error: "Webhook processing failed" });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "webhook failed" });
   }
 });
 
 // =====================
-// ADMIN API
+// ADMIN DATA
 // =====================
 app.get('/api/admin/donations', requireAdmin, async (req, res) => {
   const result = await pool.query(
@@ -286,6 +220,9 @@ app.get('/api/admin/donations', requireAdmin, async (req, res) => {
   res.json(result.rows);
 });
 
+// =====================
+// SUMMARY FIX
+// =====================
 app.get('/api/admin/summary', requireAdmin, async (req, res) => {
   const total = await pool.query(`SELECT COALESCE(SUM(amount),0) FROM donations`);
   const success = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='success'`);
@@ -299,18 +236,10 @@ app.get('/api/admin/summary', requireAdmin, async (req, res) => {
 });
 
 // =====================
-// HEALTH CHECK
-// =====================
-app.get('/health', (req, res) => {
-  res.json({ status: "ok" });
-});
+app.use(express.static(path.join(__dirname)));
 
-// =====================
-// START SERVER
-// =====================
-const PORT = process.env.PORT || 3000;
+app.get('/health', (req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📊 Database: ${process.env.DATABASE_URL ? 'PostgreSQL' : 'Memory fallback (not persistent)'}`);
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Server running");
 });
