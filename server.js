@@ -3,6 +3,7 @@ const path = require('path');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const crypto = require('crypto');
+const session = require('express-session');
 const { Lipana } = require('@lipana/sdk');
 
 dotenv.config();
@@ -13,6 +14,18 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(session({
+  secret: process.env.ADMIN_SESSION_SECRET || 'default_secret',
+  resave: false,
+  saveUninitialized: false
+}));
+
+function requireAdmin(req, res, next) {
+  if (!req.session.isAdmin) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
 
 // =====================
 // STATUS NORMALIZER (FIXED)
@@ -23,7 +36,7 @@ function normalizeStatus(status) {
   const s = String(status).toLowerCase();
 
   if (s.includes("success") || s === "0") return "success";
-  if (s.includes("fail") || s === "1") return "failed";
+  if (s === "failed" || s === "fail" || s === "1") return "failed";
 
   return "pending";
 }
@@ -140,9 +153,28 @@ app.post('/api/webhook', async (req, res) => {
 });
 
 // =====================
+// ADMIN LOGIN
+// =====================
+app.post('/api/admin/login', async (req, res) => {
+  const { username, password } = req.body;
+
+  if (username === process.env.ADMIN_USERNAME && password === process.env.ADMIN_PASSWORD) {
+    req.session.isAdmin = true;
+    return res.json({ success: true });
+  }
+
+  res.status(401).json({ error: 'Invalid credentials' });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  req.session.isAdmin = false;
+  res.json({ success: true });
+});
+
+// =====================
 // ADMIN DATA
 // =====================
-app.get('/api/admin/donations', async (req, res) => {
+app.get('/api/admin/donations', requireAdmin, async (req, res) => {
   const result = await pool.query(
     `SELECT * FROM donations ORDER BY created_at DESC LIMIT 100`
   );
@@ -151,15 +183,15 @@ app.get('/api/admin/donations', async (req, res) => {
 });
 
 // =====================
-// SUMMARY FIX
+// SUMMARY
 // =====================
-app.get('/api/admin/summary', async (req, res) => {
-  const total = await pool.query(`SELECT COALESCE(SUM(amount),0) FROM donations`);
-  const success = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='success'`);
-  const failed = await pool.query(`SELECT COUNT(*) FROM donations WHERE status='failed'`);
+app.get('/api/admin/summary', requireAdmin, async (req, res) => {
+  const total = await pool.query(`SELECT COALESCE(SUM(amount),0) as total FROM donations`);
+  const success = await pool.query(`SELECT COUNT(*) as count FROM donations WHERE status='success'`);
+  const failed = await pool.query(`SELECT COUNT(*) as count FROM donations WHERE status='failed'`);
 
   res.json({
-    total: total.rows[0].coalesce,
+    total: total.rows[0].total,
     success: success.rows[0].count,
     failed: failed.rows[0].count
   });

@@ -32,9 +32,13 @@ async function initDb() {
     `);
 
     await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_donations_reference ON donations(reference);
-      CREATE INDEX IF NOT EXISTS idx_donations_status ON donations(status);
-      CREATE INDEX IF NOT EXISTS idx_donations_created_at ON donations(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_donations_reference ON donations(reference)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_donations_status ON donations(status)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_donations_created_at ON donations(created_at DESC)
     `);
 
     console.log("✅ PostgreSQL connected & 'donations' table is ready");
